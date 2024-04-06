@@ -1,0 +1,138 @@
+---
+title: "Pset1"
+author: "Yu Hui, Janet Cao"
+output: pdf_document
+date: "2024-04-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Set the working directory
+knitr::opts_knit$set(root.dir = '/Users/huiyu/Documents/uchicago/2024spring/CasualInference/pset3')
+library(dplyr)
+library(tibble)
+library(stats)
+library(systemfit)
+```
+
+## Part1: Describe the Data (10 p)
+
+Combine the NSW data in nswre74\_control.csv and nswre74\_treated.csv and complete Table \ref{tab:Tab_NSW_1}. Note that variables 1-10 are \textcolor{green}{predetermined}, i.e., capture characteristics determined at or before treatment assignment; some of these variables are background characteristics (e.g., \texttt{edu}), others capture a subject's pre-RCT labor market experience (e.g., \texttt{u75}). \texttt{re78} is the observed outcome variable. \texttt{treat} is the indicator of treatment status.
+
+### Q1: Combine the NSW data in nswre74\_control.csv and nswre74\_treated.csv and complete Table \ref{tab:Tab_NSW_1}. Note that variables 1-10 are \textcolor{green}{predetermined}, i.e., capture characteristics determined at or before treatment assignment; some of these variables are background characteristics (e.g., \texttt{edu}), others capture a subject's pre-RCT labor market experience (e.g., \texttt{u75}). \texttt{re78} is the observed outcome variable. \texttt{treat} is the indicator of treatment status.
+   
+```{r}
+df1 <- read.csv("nswre74_treated.csv")
+df2 <- read.csv("nswre74_control.csv")
+df <-rbind(df1, df2)
+# Summarize variables by treatment group
+table <- df %>%
+  group_by(treat) %>% # group by treatment status 
+  summarize_all(~mean(.)) %>% # summarize mean 
+  mutate_all(~round(., 3)) %>% # limit digits 
+  t() %>% # transpose
+  as.data.frame()
+colnames(table) <- c("mean_control", "mean_treat") 
+table <- tibble::rownames_to_column(table, "varname")
+```
+
+## Part2: Test Balance (55 p)
+
+### Q2: Test \textcolor{green}{balance} for each of the 10 OPVs in Table (\ref{tab:Tab_NSW_1}), i.e.,  test that each variable's mean is the same in the control and treated groups. Do so by running 10 simple linear regressions (SLR) specifications. Use a 5\% significance level and look at the relevant 10 t-tests, comment on your findings.
+
+
+```{r}
+OPVs <- c("age", "edu", "black", "hisp", "married", "nodegree", "re74", "re75", "u74", "u75") # OPVs with order
+# Simple Linear Regression
+df.balance1 <- data.frame(varname = OPVs,
+coef_SLR = rep(0,length(OPVs)),
+se_SLR = rep(0,length(OPVs)),
+tstat_SLR = rep(0,length(OPVs))) 
+for (i in 1:10){ # for the ten OPVs
+  x <- OPVs[i]
+  model.21 <- lm(formula = paste(x, "~ treat"), data = df) # SLR
+  summary.21 <- summary(model.21)$coefficients[2,] # summary of model   
+  df.balance1$coef_SLR[i] <- summary.21["Estimate"][[1]] # extract coefficient
+  df.balance1$se_SLR[i] <- summary.21["Std. Error"][[1]] 
+  df.balance1$tstat_SLR[i] <- summary.21["t value"][[1]]
+  df.balance1$pvalue[i] <- summary.21["Pr(>|t|)"][[1]]
+}
+# Determine significance
+df.balance1$significance <- ifelse(abs(df.balance1$tstat) > 1.96, TRUE, FALSE)
+# Output
+knitr::kable(df.balance1) # output
+```
+
+The null hypothesis is “The effect of treatment of predetermined variables is not significantly different than zero”. We compare the t values of each estimated coefficients with critical value 1.96 and report whether we can reject the null hypothesis with 5% significance. It is claiming that the people treated by the program is more likely to have a degree (education >= 12), which could be a problem for causal inference later: the effects of program are mixed with the effects of degree education.
+We can see that only nodegree is significantly different for treatment and control group. As a result, we can not surely conclude that the means of all predetermined variables are the same across treatment and control group.
+However, note that this is not a perfect test. When we are testing 10 variables separately, each of them has a 5% chance of producing a significant estimate when the true coefficient is 0. Then, when we obtain a p-value of 0.001 for nodegree.
+
+### Q3: Testing balance as done in \textbf{\ref{item:balance_test:single_tests}} suffers from the so called \href{https://en.wikipedia.org/wiki/Multiple_comparisons_problem}{\textcolor{green}{``multiple comparisons''}} or \textcolor{green}{``multiple testing'' problem} which occurs when one considers a set of statistical inferences simultaneously. The \href{https://explainxkcd.com/wiki/index.php/882:_Significant}{problem} emerges because, as more variables are compared, it becomes more likely that the treatment and control groups appear to differ on at least one attribute \textit{by random chance alone}. To deal with this problem we use an estimation methodology called \textcolor{green}{SUR estimation} and then test just one hypothesis, the \textit{joint} hypothesis that all OPVs are balanced, i.e., their means are the same in the two groups. 
+
+#### a)  Estimate the SUR system. Are the estimated coefficients and their SEs different from those obtained in \textbf{\ref{item:balance_test:single_tests}}
+
+```{r}
+# A list of 10 formulas
+sur.system <- lapply(OPVs, function(x) as.formula(paste(x, "~ treat"))) # SUR fit
+sur.fit <- systemfit(formula = sur.system,
+                     method = "SUR",
+                     data = df,
+                     maxit = 100)
+df.balance2 <- summary(sur.fit)$coefficients[ 
+  grep("treat$", rownames(summary(sur.fit)$coefficients)), 
+  c("Estimate", "Std. Error", "t value")] %>% 
+  as.data.frame()
+colnames(df.balance2) <- c("coef_SUR", "se_SUR","tstat_SUR") 
+df.balance2$varname <- OPVs
+knitr::kable(merge(df.balance1[c("varname", "coef_SLR", "se_SLR")],df.balance2[c("varname", "coef_SUR", "se_SUR")]))
+```
+
+The estimated coefficients and their SEs are the same to those obtained in SLR, which means there is no efficiency payoff to GLS versus OLS. We can infer that 1) the unobservables, such as locations, are uncorrelated across equations within individuals. Therefore, allowing for correlation using SUR does not change the result. Or 2) the equations have identical covariate treat, making the results the same.
+
+#### b) Test \textit{joint} balance by testing the \textcolor{green}{joint hypothesis} that the coefficients of \texttt{treat} are zero in all the equations of the system. Spell out null and alternative hypotheses, comment on findings, and verify the test's value and p-value ``manually.''
+
+```{r}
+# restricted model
+null.system <- lapply(OPVs, function(x) as.formula(paste(x, "~ 1"))) # list formulas
+null.fit <- systemfit(formula = null.system,
+                     method = "SUR",
+                     data = df,
+                     maxit = 100)
+# LR test
+lrtest.obj <- lrtest(null.fit, sur.fit)
+# Manual
+chisq <- -2 * (logLik(null.fit)[1] - logLik(sur.fit)[1]) 
+pvalue <- pchisq(chisq, df = 10,lower.tail = F) # one-tail
+# Compare
+lrtest.obj["Chisq"]
+lrtest.obj["Pr(>Chisq)"] # p-value = 0.02835
+chisq
+pvalue
+
+```
+The manually computed test’s value and p-value verifies the test results. The p-value 0.028 < 0.05, so we can reject with 5% confidence level the null hypothesis that the restricted model is not better at accounting for the variation in data than the restricted model. In other words, our sample is likely to be unbalanced given that treat has significant effects on covariates.
+We arrived at the same results as what we have concluded in the seperate regressions. We need to be careful in interpreting the coefficient estimate as causal because there are significant differences between the treatment and control group in the program.
+
+### Q4: Test that the OPVs do not predict treatment assignment.  Spell out null and alternative hypotheses, comment on findings, and verify the test's value and p-value ``manually.'' Why would scientists carry out this test?
+
+Null hypothesis H0: The coefficients of OPVS are all zero in the multiple linear regression model.
+Alternative hypothesis H1 :: At least one of the coefficients of OPVS is not zero in in the multiple linear regression model.
+
+```{r}
+# MLRM and summary
+model.23 <- lm(treat ~ age + edu + black + hisp + married + 
+                 nodegree + u74 + u75 + re74 + re75, data = df)
+summary(model.23)$fstatistic
+# Manual F statistics
+sst <- sum((df$treat - mean(df$treat))^2) # sum square total
+ssr <- sum((df$treat - model.23$fitted)^ 2) # sum square residual 
+fstat <- ( (sst-ssr)/10) / (ssr/(length(df$treat)-10-1) )
+fstat # same as before
+# P-value
+pf(fstat, 10 , 434, lower.tail = F)
+
+```
+
+The p-value of the f test is 0.0314, smaller than 5%. Therefore, we can not reject the null hypothesis under 5% significance level. We can conclude that at least one of the coefficients of OPVS is not zero in in the multiple linear regression model.
+Scientists would carry out this test to ensure that the assignment of program treatment is truly random. That is, the program did not select on the observables like age, education, and degree level to decide who can get into the training program. Without the random assignment, it would be hard to determine the causal impact of training. The difference in post-program earnings between the treatment group and control group could be contaminated by their other characteristics. For example, the treated workers earn a higher wage later simply because they are more likely to have a degree compared to the control group workers.
+
