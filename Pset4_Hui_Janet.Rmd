@@ -12,8 +12,7 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-# # Set the working directory
-# knitr::opts_knit$set(root.dir = '/Users/huiyu/Documents/uchicago/2024spring/CasualInference/pset3')
+
 library(dplyr)
 library(tibble)
 library(stats)
